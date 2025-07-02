@@ -84,6 +84,8 @@ pub mod pallet {
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 		/// A type representing the weights required by the dispatchables of this pallet.
 		type WeightInfo: WeightInfo;
+		type MaxIdLength: Get<u32>;
+		type MaxMetadataLength: Get<u32>;
 	}
 
 	/// A storage item for this pallet.
@@ -92,6 +94,16 @@ pub mod pallet {
 	/// `u32` value. Learn more about runtime storage here: <https://docs.substrate.io/build/runtime-storage/>
 	#[pallet::storage]
 	pub type Something<T> = StorageValue<_, u32>;
+
+	#[pallet::storage]
+	#[pallet::getter(fn metadata_by_id)]
+	pub type Metadata<T: Config> = StorageMap<
+		_,
+		Blake2_128Concat,
+		BoundedVec<u8, T::MaxIdLength>,  // e.g., UUID or PID
+		(T::AccountId, BoundedVec<u8, T::MaxMetadataLength>),
+		OptionQuery
+	>;
 
 	/// Events that functions in this pallet can emit.
 	///
@@ -113,6 +125,12 @@ pub mod pallet {
 			/// The account who set the new value.
 			who: T::AccountId,
 		},
+		OwnershipTransferred{
+			sender: T::AccountId, new_owner: T::AccountId, id: BoundedVec<u8, T::MaxIdLength>
+		},
+		MetadataRegistered{
+			sender: T::AccountId, id: BoundedVec<u8, T::MaxIdLength>
+		}
 	}
 
 	/// Errors that can be returned by this pallet.
@@ -129,6 +147,9 @@ pub mod pallet {
 		NoneValue,
 		/// There was an attempt to increment the value in storage over `u32::MAX`.
 		StorageOverflow,
+		AlreadyExists,
+		NotOwner,
+		NotFound
 	}
 
 	/// The pallet's dispatchable functions ([`Call`]s).
@@ -145,58 +166,39 @@ pub mod pallet {
 	/// The [`weight`] macro is used to assign a weight to each call.
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
-		/// An example dispatchable that takes a single u32 value as a parameter, writes the value
-		/// to storage and emits an event.
-		///
-		/// It checks that the _origin_ for this call is _Signed_ and returns a dispatch
-		/// error if it isn't. Learn more about origins here: <https://docs.substrate.io/build/origins/>
 		#[pallet::call_index(0)]
-		#[pallet::weight(T::WeightInfo::do_something())]
-		pub fn do_something(origin: OriginFor<T>, something: u32) -> DispatchResult {
-			// Check that the extrinsic was signed and get the signer.
-			let who = ensure_signed(origin)?;
+		#[pallet::weight(10_000)] //TODO benchmark
+		pub fn register_metadata(
+			origin: OriginFor<T>,
+			id: BoundedVec<u8, T::MaxIdLength>,
+			metadata: BoundedVec<u8, T::MaxMetadataLength>,
+		) -> DispatchResult {
+			let sender = ensure_signed(origin)?;
 
-			// Update storage.
-			Something::<T>::put(something);
+			ensure!(!Metadata::<T>::contains_key(&id), Error::<T>::AlreadyExists);
 
-			// Emit an event.
-			Self::deposit_event(Event::SomethingStored { something, who });
+			Metadata::<T>::insert(&id, (sender.clone(), metadata));
 
-			// Return a successful `DispatchResult`
+			Self::deposit_event(Event::MetadataRegistered{ sender, id });
 			Ok(())
 		}
 
-		/// An example dispatchable that may throw a custom error.
-		///
-		/// It checks that the caller is a signed origin and reads the current value from the
-		/// `Something` storage item. If a current value exists, it is incremented by 1 and then
-		/// written back to storage.
-		///
-		/// ## Errors
-		///
-		/// The function will return an error under the following conditions:
-		///
-		/// - If no value has been set ([`Error::NoneValue`])
-		/// - If incrementing the value in storage causes an arithmetic overflow
-		///   ([`Error::StorageOverflow`])
 		#[pallet::call_index(1)]
-		#[pallet::weight(T::WeightInfo::cause_error())]
-		pub fn cause_error(origin: OriginFor<T>) -> DispatchResult {
-			let _who = ensure_signed(origin)?;
+		#[pallet::weight(100_000)] //TODO benchmark
+		pub fn transfer_ownership(
+			origin: OriginFor<T>,
+			id: BoundedVec<u8, T::MaxIdLength>,
+			new_owner: T::AccountId,
+		) -> DispatchResult {
+			let sender = ensure_signed(origin)?;
+			let (owner, metadata) = Metadata::<T>::get(&id).ok_or(Error::<T>::NotFound)?;
 
-			// Read a value from storage.
-			match Something::<T>::get() {
-				// Return an error if the value has not been set.
-				None => Err(Error::<T>::NoneValue.into()),
-				Some(old) => {
-					// Increment the value read from storage. This will cause an error in the event
-					// of overflow.
-					let new = old.checked_add(1).ok_or(Error::<T>::StorageOverflow)?;
-					// Update the value in storage with the incremented result.
-					Something::<T>::put(new);
-					Ok(())
-				},
-			}
+			ensure!(owner == sender, Error::<T>::NotOwner);
+
+			Metadata::<T>::insert(&id, (new_owner.clone(), metadata));
+
+			Self::deposit_event(Event::OwnershipTransferred {sender, new_owner, id} );
+			Ok(())
 		}
 	}
 }

@@ -1,5 +1,6 @@
 use crate as pallet_template;
 use frame_support::derive_impl;
+use sp_core::ConstU32;
 use sp_runtime::BuildStorage;
 
 type Block = frame_system::mocking::MockBlock<Test>;
@@ -38,6 +39,8 @@ impl frame_system::Config for Test {
 impl pallet_template::Config for Test {
 	type RuntimeEvent = RuntimeEvent;
 	type WeightInfo = ();
+	type MaxIdLength = ConstU32<64>;
+	type MaxMetadataLength = ConstU32<1024>;
 }
 
 // Build genesis storage according to the mock runtime.
